@@ -1,4 +1,4 @@
-//go:generate goversioninfo
+//go:generate goversioninfo -icon=emlmr.ico
 
 package main
 
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"emlmr/cmd"
+	"github.com/bentucker/emlmr/cmd"
 	flags "github.com/jessevdk/go-flags"
 )
 

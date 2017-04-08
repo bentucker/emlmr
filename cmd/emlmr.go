@@ -7,35 +7,35 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	set "github.com/emirpasic/gods/sets/hashset"
+	stack "github.com/emirpasic/gods/stacks/arraystack"
 	"github.com/jhillyerd/go.enmime"
 	"github.com/olekukonko/tablewriter"
 	"gopkg.in/cheggaaa/pb.v1"
-	"gopkg.in/fatih/set.v0"
 )
 
 type Options struct {
-	Delimiter  string `short:"d" long:"delimiter" value-name:"DELIM" description:"use DELIM instead of COMMA for field delimiter." default:","`
-	Digest     string `long:"digest" choice:"md5" choice:"sha1" description:"compute message digest for each email."`
-	ListFields bool `short:"l" long:"list-fields" description:"list all metadata fields found."`
-	Fields     []string `short:"f" long:"field" default:"all" value-name:"FIELD" description:"include FIELD in report."`
-	Output     string `short:"o" long:"output" value-name:"FILE" description:"write output to FILE instead of stdout."`
-	Version    bool `long:"version" description:"Show application version and exit."`
-	Args struct {
-		Files []string
-	}   `positional-args:"yes" required:"yes" value-name:"FILE"`
+	Delimiter  string   `short:"d" long:"delimiter" value-name:"DELIM" description:"use DELIM instead of COMMA for field delimiter" default:","`
+	Digest     string   `long:"digest" choice:"md5" choice:"sha1" description:"compute message digest for each email"`
+	Fields     []string `short:"f" long:"field" default:"all" value-name:"FIELD" description:"include FIELD in report"`
+	ListFields bool     `short:"l" long:"list-fields" description:"list all metadata fields found"`
+	Output     string   `short:"o" long:"output" value-name:"FILE" description:"write output to FILE instead of stdout"`
+	Recursive  bool     `short:"r" long:"recursive" description:"read all EML files under each directory, recursively"`
+	Version    bool     `long:"version" description:"Show application version and exit"`
+	Args       struct {
+		Files []string `positional-arg-name:"FILE"`
+	} `positional-args:"yes" required:"yes"`
 }
 
-func ListFields(opts *Options) error {
-	paths, err := resolvePaths(opts.Args.Files)
-	if err != nil {
-		log.Fatal(err)
-	}
+func ListFields(opts *Options) {
+	paths := resolvePaths(opts.Args.Files, opts.Recursive)
 	count := len(paths)
 	_fields := set.New()
 
@@ -43,13 +43,17 @@ func ListFields(opts *Options) error {
 	for i := 0; i < count; i++ {
 		fh, err := os.Open(paths[i])
 		if err != nil {
-			log.Print(err)
+			log.Println(err)
 			continue
 		}
 
 		reader := bufio.NewReader(fh)
 		md, err := readMeta(reader)
 		fh.Close()
+		if err != nil {
+			log.Printf("Error parsing %s: %s", paths[i], err.Error())
+			continue
+		}
 		for k := range md {
 			_fields.Add(k)
 		}
@@ -57,7 +61,7 @@ func ListFields(opts *Options) error {
 	}
 	bar.Finish()
 
-	fieldList := _fields.List()
+	fieldList := _fields.Values()
 	fields := make([]string, len(fieldList))
 	for i, field := range fieldList {
 		fields[i] = field.(string)
@@ -66,15 +70,10 @@ func ListFields(opts *Options) error {
 	for _, field := range fields {
 		fmt.Println(field)
 	}
-
-	return nil
 }
 
-func RunReport(opts *Options) error {
-	paths, err := resolvePaths(opts.Args.Files)
-	if err != nil {
-		log.Fatal(err)
-	}
+func RunReport(opts *Options) {
+	paths := resolvePaths(opts.Args.Files, opts.Recursive)
 	count := len(paths)
 	report := []map[string]string{}
 	fieldsHit := set.New()
@@ -85,8 +84,8 @@ func RunReport(opts *Options) error {
 	m := md5.New()
 	s := sha1.New()
 
-	inclFilename := reqFields.Has("filename") || reqFields.Has("all")
-	inclPath := reqFields.Has("path") || reqFields.Has("all")
+	inclFilename := reqFields.Contains("filename") || reqFields.Contains("all")
+	inclPath := reqFields.Contains("path") || reqFields.Contains("all")
 
 	bar := pb.StartNew(count)
 	for i := 0; i < count; i++ {
@@ -95,13 +94,20 @@ func RunReport(opts *Options) error {
 			log.Println(err)
 			continue
 		}
+
+		// read the file contents
 		reader := bufio.NewReader(fh)
 		buf := new(bytes.Buffer)
 		buf.ReadFrom(reader)
 		fh.Close()
 
 		md, err := readMeta(bufio.NewReader(bytes.NewReader(buf.Bytes())))
+		if err != nil {
+			log.Printf("Error parsing %s: %s", paths[i], err.Error())
+			continue
+		}
 
+		// calculate message digest
 		if opts.Digest == "md5" {
 			m.Reset()
 			_, err := buf.WriteTo(m)
@@ -117,6 +123,8 @@ func RunReport(opts *Options) error {
 			}
 			md["sha1"] = hex.EncodeToString(s.Sum(nil))
 		}
+
+		// add filename and path fields
 		if inclFilename {
 			md["filename"] = filepath.Base(paths[i])
 		}
@@ -132,17 +140,23 @@ func RunReport(opts *Options) error {
 	}
 	bar.Finish()
 
+	// decide which fields to include in the report
 	var fields []string
-	if reqFields.Has("all") {
+	if reqFields.Contains("all") {
+		// if "all" fields were requested, use all the fields that were hit
+		// during processing
 		fields = make([]string, fieldsHit.Size())
-		fieldList := fieldsHit.List()
+		fieldList := fieldsHit.Values()
 		for i, field := range fieldList {
 			fields[i] = field.(string)
 		}
 		sort.Strings(fields)
 	} else {
+		// otherwise, just use the fields specified on the command line
 		fields = opts.Fields
 	}
+
+	// include digest field in report
 	if opts.Digest != "" {
 		fields = append(fields, opts.Digest)
 	}
@@ -152,36 +166,66 @@ func RunReport(opts *Options) error {
 	} else {
 		writeReport(fields, report, opts)
 	}
-
-	return nil
 }
 
-func resolvePaths(paths []string) ([]string, error) {
+func resolvePaths(paths []string, recursive bool) []string {
 	absPaths := []string{}
 
+	// push all of the initial paths onto a stack
+	pathStack := stack.New()
 	for _, path := range paths {
-		gPaths, err := filepath.Glob(path)
+		matches, err := filepath.Glob(path)
 		if err != nil {
-			continue
+			matches = []string{path}
 		}
 
-		for _, gPath := range gPaths {
-			absPath, _ := filepath.Abs(gPath)
-			mode, err := os.Stat(absPath)
-
+		for _, path2 := range matches {
+			absPath, err := filepath.Abs(path2)
 			if err != nil {
-				return nil, err
+				log.Println(err)
+				continue
 			}
-
-			if mode.IsDir() {
-				filepath.Walk(absPath, find(&absPaths))
-			} else {
-				absPaths = append(absPaths, absPath)
-			}
+			pathStack.Push(absPath)
 		}
 	}
 
-	return absPaths, nil
+	// add all the files in each path in the pathStack to absPaths
+	for empty := pathStack.Empty(); empty == false; {
+		path, ok := pathStack.Pop()
+		if !ok {
+			break
+		}
+		absPath, err := filepath.Abs(path.(string))
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		mode, err := os.Stat(absPath)
+
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+
+		if mode.IsDir() && recursive {
+			// if recursion is enabled and we hit a directory, add all the
+			// paths in that subdirectory to the pathStack so that we can
+			// find the files contained in each subdirectory
+			children, err := ioutil.ReadDir(absPath)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			for _, child := range children {
+				pathStack.Push(filepath.Join(absPath, child.Name()))
+			}
+		} else if !mode.IsDir() {
+			// add each file to the absPaths list
+			absPaths = append(absPaths, absPath)
+		}
+	}
+
+	return absPaths
 }
 
 func readMeta(reader *bufio.Reader) (map[string]string, error) {
@@ -196,22 +240,6 @@ func readMeta(reader *bufio.Reader) (map[string]string, error) {
 	}
 
 	return headers, nil
-}
-
-func find(paths *[]string) func(path string, info os.FileInfo,
-	err error) error {
-
-	return func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-
-		if !info.IsDir() {
-			*paths = append(*paths, path)
-		}
-
-		return nil
-	}
 }
 
 func printReport(fields []string, report []map[string]string) {
