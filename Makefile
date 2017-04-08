@@ -8,17 +8,18 @@ ARCHIVE := $(BIN)-$(VERSION)
 default: all
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf "$(BUILD_DIR)"
 	@rm -rf $(ARCHIVE)
 	@rm -f $(ARCHIVE).tar.gz
 
 build: $(GO_MAIN)
-	mkdir -p $(BUILD_DIR)
-	go build -ldflags "-X main.version=$(VERSION)" -o $(BUILD_DIR)/$(BIN)
+	go get github.com/josephspurrier/goversioninfo/cmd/goversioninfo
+	mkdir -p "$(BUILD_DIR)"
+	go build -ldflags "-X main.version=$(VERSION)" -o "$(BUILD_DIR)/$(BIN)"
 
 archive: build
 ifeq ("$(wildcard $(ARCHIVE).tar.gz)","")
-	@ln -s $(BUILD_DIR) $(ARCHIVE)
+	@ln -s "$(BUILD_DIR)" $(ARCHIVE)
 	@tar -czf $(ARCHIVE).tar.gz $(ARCHIVE)/*
 	@rm $(ARCHIVE)
 endif

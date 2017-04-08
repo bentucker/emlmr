@@ -23,13 +23,13 @@ import (
 
 type Options struct {
 	Delimiter  string   `short:"d" long:"delimiter" value-name:"DELIM" description:"use DELIM instead of COMMA for field delimiter" default:","`
-	Digest     string   `long:"digest" choice:"md5" choice:"sha1" description:"compute message digest for each email"`
+	Digest     []string `long:"digest" choice:"md5" choice:"sha1" description:"compute message digest for each email"`
 	Fields     []string `short:"f" long:"field" default:"all" value-name:"FIELD" description:"include FIELD in report"`
 	ListFields bool     `short:"l" long:"list-fields" description:"list all metadata fields found"`
 	Output     string   `short:"o" long:"output" value-name:"FILE" description:"write output to FILE instead of stdout"`
 	Recursive  bool     `short:"r" long:"recursive" description:"read all EML files under each directory, recursively"`
 	Version    bool     `long:"version" description:"Show application version and exit"`
-	Args       struct {
+	Args struct {
 		Files []string `positional-arg-name:"FILE"`
 	} `positional-args:"yes" required:"yes"`
 }
@@ -84,6 +84,11 @@ func RunReport(opts *Options) {
 	m := md5.New()
 	s := sha1.New()
 
+	digests := set.New()
+	for _, hash := range opts.Digest {
+		digests.Add(hash)
+	}
+
 	inclFilename := reqFields.Contains("filename") || reqFields.Contains("all")
 	inclPath := reqFields.Contains("path") || reqFields.Contains("all")
 
@@ -108,16 +113,17 @@ func RunReport(opts *Options) {
 		}
 
 		// calculate message digest
-		if opts.Digest == "md5" {
+		if digests.Contains("md5") {
 			m.Reset()
-			_, err := buf.WriteTo(m)
+			_, err := m.Write(buf.Bytes())
 			if err != nil {
 				log.Println(err)
 			}
 			md["md5"] = hex.EncodeToString(m.Sum(nil))
-		} else if opts.Digest == "sha1" {
+		}
+		if digests.Contains("sha1") {
 			s.Reset()
-			_, err := buf.WriteTo(s)
+			_, err := s.Write(buf.Bytes())
 			if err != nil {
 				log.Println(err)
 			}
@@ -157,8 +163,8 @@ func RunReport(opts *Options) {
 	}
 
 	// include digest field in report
-	if opts.Digest != "" {
-		fields = append(fields, opts.Digest)
+	if !digests.Empty() {
+		fields = append(fields, opts.Digest...)
 	}
 
 	if opts.Output == "" {
